@@ -4,97 +4,136 @@ using ClickHouse.Driver.Utility;
 namespace ClickHouse.Driver.Examples;
 
 /// <summary>
-/// Explains the UseCompression setting and how compression works in the driver.
+/// How to choose a compression method and what each one costs.
 ///
-/// TL;DR: Compression is enabled by default and you rarely need to change it.
+/// TL;DR: The driver supports four compression methods over HTTP:
+///   - <c>None</c>: no compression.
+///   - <c>Gzip</c>: standard HTTP gzip (default; back-compatible with every server).
+///   - <c>Lz4</c>: ClickHouse native block framing; much lower CPU than gzip.
+///   - <c>Zstd</c>: ClickHouse native block framing; best ratio at modest CPU.
 ///
-/// ## How It Works
+/// ## Tradeoffs at a glance
 ///
-/// When UseCompression=true (the default):
+/// Measured end-to-end on representative RowBinary payloads (see
+/// ClickHouse.Driver.Benchmark/CompressionBenchmark.cs):
 ///
-/// 1. **Requests (client → server)**:
-///    - The driver compresses the request body using GZip
-///    - Adds Content-Encoding: gzip header
+/// | Method | Compression ratio vs gzip | Decompress CPU vs gzip | Notes                    |
+/// | ------ | ------------------------- | ---------------------- | ------------------------ |
+/// | None   | 1.0× (raw)                | n/a                    | Fastest CPU, widest wire |
+/// | Gzip   | baseline                  | baseline               | Ubiquitous, HTTP native  |
+/// | Lz4    | slightly worse (≈1.3×)    | ~3–8× faster           | Best for CPU-bound       |
+/// | Zstd   | 1.5–2.5× better           | ~1.3–1.7× faster       | Best for bandwidth-bound |
 ///
-/// 2. **Responses (server → client)**:
-///    - The driver sends enable_http_compression=true query parameter
-///    - ClickHouse compresses the response with GZip
-///    - HttpClient automatically decompresses it (via AutomaticDecompression)
+/// ## How each method works on the wire
 ///
-/// ## When to Disable Compression
+/// - <c>Gzip</c>:
+///   - Request: <c>Content-Encoding: gzip</c>
+///   - Response: <c>Accept-Encoding: gzip</c> + query param <c>enable_http_compression=1</c>
+///   - HttpClient decompresses the response automatically (AutomaticDecompression).
 ///
-/// - **Low-latency/local connections**: Compression is a trade-off between CPU time and network time.
-///   On localhost or fast networks, uncompressed may be faster for small payloads.
-/// - **Already compressed data**: If you're inserting pre-compressed data or
-///   data that doesn't compress well (random bytes, encrypted data).
+/// - <c>Lz4</c> / <c>Zstd</c>:
+///   - Uses ClickHouse's native block-compression framing, not standard HTTP encodings.
+///   - Request: query params <c>compress=1&amp;decompress=1&amp;network_compression_method=lz4</c> (or zstd);
+///     body is a sequence of [checksum(16) | method(1) | csize(4) | usize(4) | payload] frames
+///     with a CityHash128 per block.
+///   - Response: same framing in reverse.
+///
+/// ## Setting the method
+///
+/// Via connection string (case-insensitive):
+///
+///     "Host=localhost;Compression=lz4"
+///     "Host=localhost;Compression=zstd"
+///     "Host=localhost;Compression=gzip"   // same as Compression=true (default)
+///     "Host=localhost;Compression=none"   // same as Compression=false
+///
+/// Via ClickHouseClientSettings (strongly typed, recommended):
+///
+///     var settings = new ClickHouseClientSettings
+///     {
+///         Host = "localhost",
+///         CompressionMethod = CompressionMethod.Lz4,
+///     };
+///
+/// ## When to pick which
+///
+/// - **CPU-bound workloads** (large SELECTs where decompress time dominates): use <c>Lz4</c>.
+/// - **Bandwidth-bound workloads** (remote server, limited uplink): use <c>Zstd</c>.
+/// - **Localhost, tiny payloads, or already-compressed data** (parquet, encrypted bytes):
+///   use <c>None</c> — compression can be net-negative when the payload doesn't compress.
+/// - **Default/unsure**: stay on <c>Gzip</c>. It's the old default, works on every server
+///   version, and is good enough for most workloads.
 ///
 /// ## Important: Custom HttpClient Configuration
 ///
-/// If you provide your own HttpClient, you MUST configure AutomaticDecompression
-/// when compression is enabled, otherwise you'll get an error when reading responses:
+/// If you provide your own <see cref="System.Net.Http.HttpClient"/> and use <c>Gzip</c>,
+/// you MUST configure <c>AutomaticDecompression</c>:
 ///
 ///     var handler = new HttpClientHandler
 ///     {
-///         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+///         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
 ///     };
 ///     var httpClient = new HttpClient(handler);
 ///
-/// The driver's default HttpClient already has this configured.
-///
-/// ## InsertBinaryAsync
-///
-/// Note: InsertBinaryAsync always uses GZip compression for uploads regardless
-/// of the UseCompression setting. This is because bulk inserts benefit significantly
-/// from compression due to the large data volumes involved.
+/// For <c>Lz4</c>/<c>Zstd</c> no HttpClient config is needed — the driver's own
+/// <c>BlockDecompressionStream</c> decodes the response body regardless of handler.
 /// </summary>
 public static class Compression
 {
     public static async Task Run()
     {
-        Console.WriteLine("Compression Setting\n");
+        Console.WriteLine("Compression Methods\n");
 
-        // Default: compression enabled
-        Console.WriteLine("1. Default behavior (compression enabled):");
+        // 1. Default — Gzip (back-compatible, ubiquitous).
+        Console.WriteLine("1. Default (Gzip):");
         using (var client = new ClickHouseClient("Host=localhost"))
         {
-            // The driver will:
-            // - Compress request bodies with GZip
-            // - Request compressed responses via enable_http_compression=true
-            var result = await client.ExecuteScalarAsync("SELECT 'Compressed request and response'");
-            Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Request was GZip compressed, response was GZip compressed\n");
+            var result = await client.ExecuteScalarAsync("SELECT 'hello from gzip'");
+            Console.WriteLine($"   Result: {result}\n");
         }
 
-        // Compression disabled
-        Console.WriteLine("2. Compression disabled:");
-        using (var client = new ClickHouseClient("Host=localhost;Compression=false"))
+        // 2. LZ4 — lowest CPU, slightly worse ratio than gzip.
+        Console.WriteLine("2. LZ4 (low CPU):");
+        using (var client = new ClickHouseClient("Host=localhost;Compression=lz4"))
         {
-            // The driver will:
-            // - Send uncompressed request bodies
-            // - Set enable_http_compression=false (uncompressed responses)
-            var result = await client.ExecuteScalarAsync("SELECT 'Uncompressed request and response'");
-            Console.WriteLine($"   Result: {result}");
-            Console.WriteLine("   Request was uncompressed, response was uncompressed\n");
+            var result = await client.ExecuteScalarAsync("SELECT 'hello from lz4'");
+            Console.WriteLine($"   Result: {result}\n");
         }
 
-        // Using ClickHouseClientSettings
-        Console.WriteLine("3. Via ClickHouseClientSettings:");
+        // 3. ZSTD — best ratio, moderate CPU.
+        Console.WriteLine("3. ZSTD (best ratio):");
+        using (var client = new ClickHouseClient("Host=localhost;Compression=zstd"))
+        {
+            var result = await client.ExecuteScalarAsync("SELECT 'hello from zstd'");
+            Console.WriteLine($"   Result: {result}\n");
+        }
+
+        // 4. None — no compression. Useful on localhost or for pre-compressed payloads.
+        Console.WriteLine("4. None (no compression):");
+        using (var client = new ClickHouseClient("Host=localhost;Compression=none"))
+        {
+            var result = await client.ExecuteScalarAsync("SELECT 'uncompressed'");
+            Console.WriteLine($"   Result: {result}\n");
+        }
+
+        // 5. Using the strongly-typed enum on ClickHouseClientSettings.
+        Console.WriteLine("5. Via ClickHouseClientSettings with the CompressionMethod enum:");
         var settings = new ClickHouseClientSettings
         {
             Host = "localhost",
-            UseCompression = false  // Disable compression
+            CompressionMethod = CompressionMethod.Zstd,
         };
         using (var client = new ClickHouseClient(settings))
         {
             var result = await client.ExecuteScalarAsync("SELECT 1");
-            Console.WriteLine($"   UseCompression = {settings.UseCompression}");
+            Console.WriteLine($"   CompressionMethod = {settings.CompressionMethod}");
             Console.WriteLine($"   Result: {result}\n");
         }
 
         Console.WriteLine("Summary:");
-        Console.WriteLine("   - Default: UseCompression=true (recommended for most cases)");
-        Console.WriteLine("   - Reduces bandwidth for both requests and responses");
-        Console.WriteLine("   - Consider disabling for localhost or small, frequent queries");
-        Console.WriteLine("   - Custom HttpClient must have AutomaticDecompression configured");
+        Console.WriteLine("   - Default: Gzip (compatible with every supported server).");
+        Console.WriteLine("   - CPU-bound: prefer LZ4.");
+        Console.WriteLine("   - Bandwidth-bound: prefer ZSTD.");
+        Console.WriteLine("   - Localhost or pre-compressed data: consider None.");
     }
 }

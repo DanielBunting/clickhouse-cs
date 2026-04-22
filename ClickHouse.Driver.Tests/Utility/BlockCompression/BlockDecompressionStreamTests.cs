@@ -167,6 +167,80 @@ public class BlockDecompressionStreamTests
     }
 
     [Test]
+    public void Read_CompressedSizeExceedsMaxFrameSize_Throws_BeforeAllocation()
+    {
+        // Hostile header claims a 2 GiB compressed payload. Without the MaxFrameSize cap
+        // the stream would call ArrayPool.Shared.Rent on an attacker-controlled size and
+        // allocate gigabytes before the checksum check can reject it. With the cap we
+        // reject at header-parse time.
+        var bad = new byte[BlockFraming.ChecksumSize + BlockFraming.HeaderSize];
+        bad[BlockFraming.ChecksumSize] = BlockFraming.MethodLz4;
+        BinaryPrimitives.WriteUInt32LittleEndian(bad.AsSpan(BlockFraming.ChecksumSize + 1, 4), (uint)(BlockFraming.MaxFrameSize + 1));
+        BinaryPrimitives.WriteUInt32LittleEndian(bad.AsSpan(BlockFraming.ChecksumSize + 5, 4), 0u);
+
+        using var input = new MemoryStream(bad);
+        using var decompress = new BlockDecompressionStream(input);
+
+        var dst = new byte[16];
+        var ex = Assert.Throws<ClickHouseCompressionException>(() =>
+            decompress.Read(dst, 0, dst.Length));
+        Assert.That(ex!.Message, Does.Contain("CompressedSize").And.Contain("MaxFrameSize"));
+    }
+
+    [Test]
+    public void Read_UncompressedSizeExceedsMaxFrameSize_Throws_BeforeAllocation()
+    {
+        // Attacker may send a small compressed frame but claim a huge uncompressed size
+        // to force the driver to allocate a giant decode buffer via EnsureDecoded.
+        var bad = new byte[BlockFraming.ChecksumSize + BlockFraming.HeaderSize + 1];
+        bad[BlockFraming.ChecksumSize] = BlockFraming.MethodNone;
+        BinaryPrimitives.WriteUInt32LittleEndian(bad.AsSpan(BlockFraming.ChecksumSize + 1, 4), (uint)(BlockFraming.HeaderSize + 1));
+        BinaryPrimitives.WriteUInt32LittleEndian(bad.AsSpan(BlockFraming.ChecksumSize + 5, 4), (uint)(BlockFraming.MaxFrameSize + 1));
+
+        using var input = new MemoryStream(bad);
+        using var decompress = new BlockDecompressionStream(input);
+
+        var dst = new byte[16];
+        var ex = Assert.Throws<ClickHouseCompressionException>(() =>
+            decompress.Read(dst, 0, dst.Length));
+        Assert.That(ex!.Message, Does.Contain("UncompressedSize").And.Contain("MaxFrameSize"));
+    }
+
+    [Test]
+    public async Task Read_SyncAndAsyncPathsAgree_OnMultiFrameStream()
+    {
+        // Cross-check that the sync Read path (rewritten to avoid sync-over-async) produces
+        // bytes identical to what the async path produces on the same input.
+        var payloads = new[]
+        {
+            Lz4BlockCodecTests.Lcg(512, 11),
+            Lz4BlockCodecTests.Lcg(1000, 22),
+            Lz4BlockCodecTests.Lcg(333, 33),
+        };
+
+        byte[] syncResult;
+        using (var ms = await BuildFramedStreamAsync(payloads))
+        using (var decompress = new BlockDecompressionStream(ms))
+        using (var outMs = new MemoryStream())
+        {
+            // CopyTo uses Stream.Read synchronously.
+            decompress.CopyTo(outMs);
+            syncResult = outMs.ToArray();
+        }
+
+        byte[] asyncResult;
+        using (var ms = await BuildFramedStreamAsync(payloads))
+        using (var decompress = new BlockDecompressionStream(ms))
+        using (var outMs = new MemoryStream())
+        {
+            await decompress.CopyToAsync(outMs);
+            asyncResult = outMs.ToArray();
+        }
+
+        Assert.That(syncResult, Is.EqualTo(asyncResult));
+    }
+
+    [Test]
     public async Task Read_InvalidCompressedSize_BelowHeader_Throws()
     {
         // csize = 5 is nonsense: can't be smaller than the 9-byte header it's supposed to include.

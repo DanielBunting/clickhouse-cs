@@ -33,6 +33,16 @@ internal static class BlockFraming
     public const int DefaultBlockSize = 1024 * 1024;
 
     /// <summary>
+    /// Upper bound on either dimension of a single frame (compressed or uncompressed).
+    /// Chosen as 256× the server's default <c>max_compress_block_size</c> of 1 MiB so
+    /// practical workloads never trip it, while a malicious or corrupt header claiming
+    /// a multi-GiB frame is rejected before we allocate. This is a defense-in-depth
+    /// check performed BEFORE the CityHash128 verification — the checksum validates
+    /// bytes we've already read, but we must bound the read itself.
+    /// </summary>
+    public const int MaxFrameSize = 256 * 1024 * 1024;
+
+    /// <summary>
     /// Compresses <paramref name="source"/> with <paramref name="codec"/> and writes
     /// a single framed block to <paramref name="output"/>. Returns bytes written.
     /// </summary>
