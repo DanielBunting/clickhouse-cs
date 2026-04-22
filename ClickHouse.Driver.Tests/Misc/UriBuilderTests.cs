@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Web;
+using ClickHouse.Driver.ADO;
 using NUnit.Framework;
 
 namespace ClickHouse.Driver.Tests.Misc;
@@ -289,5 +290,114 @@ public class UriBuilderTests
 
         // Now GetEffectiveQueryId should return the custom ID, not the cached GUID
         Assert.That(uriBuilder.GetEffectiveQueryId(), Is.EqualTo("my-custom-id"));
+    }
+
+    // --- Compression method query-string contract -----------------------------------
+    //
+    // These tests pin the exact URL the driver emits for each CompressionMethod.
+    // A regression here would silently make the server reply with incompatible framing
+    // (Lz4/Zstd needs compress=1/decompress=1; Gzip needs enable_http_compression=true).
+
+    [Test]
+    public void ToString_GzipMethod_EmitsEnableHttpCompressionTrue_AndNoBlockFlags()
+    {
+        var @params = BuildAndParse(builder =>
+        {
+            builder.UseCompression = true;
+            builder.CompressionMethod = CompressionMethod.Gzip;
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("true"));
+            Assert.That(@params.Get("compress"), Is.Null);
+            Assert.That(@params.Get("decompress"), Is.Null);
+            Assert.That(@params.Get("network_compression_method"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void ToString_Lz4Method_EmitsCompressDecompressAndLz4()
+    {
+        var @params = BuildAndParse(builder =>
+        {
+            builder.UseCompression = true;
+            builder.CompressionMethod = CompressionMethod.Lz4;
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("compress"), Is.EqualTo("1"));
+            Assert.That(@params.Get("decompress"), Is.EqualTo("1"));
+            Assert.That(@params.Get("network_compression_method"), Is.EqualTo("lz4"));
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+        });
+    }
+
+    [Test]
+    public void ToString_ZstdMethod_EmitsCompressDecompressAndZstd()
+    {
+        var @params = BuildAndParse(builder =>
+        {
+            builder.UseCompression = true;
+            builder.CompressionMethod = CompressionMethod.Zstd;
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("compress"), Is.EqualTo("1"));
+            Assert.That(@params.Get("decompress"), Is.EqualTo("1"));
+            Assert.That(@params.Get("network_compression_method"), Is.EqualTo("zstd"));
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+        });
+    }
+
+    [Test]
+    public void ToString_NoneMethod_EmitsNoCompressionFlags()
+    {
+        var @params = BuildAndParse(builder =>
+        {
+            builder.UseCompression = true;
+            builder.CompressionMethod = CompressionMethod.None;
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("compress"), Is.Null);
+            Assert.That(@params.Get("decompress"), Is.Null);
+            Assert.That(@params.Get("network_compression_method"), Is.Null);
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+        });
+    }
+
+    [Test]
+    public void ToString_UseCompressionFalse_DisablesAllFlags_RegardlessOfMethod()
+    {
+        // Reconciliation invariant: UseCompression=false ⇒ behaves exactly like None,
+        // mirroring ClickHouseClientSettings.EffectiveCompressionMethod.
+        var @params = BuildAndParse(builder =>
+        {
+            builder.UseCompression = false;
+            builder.CompressionMethod = CompressionMethod.Lz4;
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(@params.Get("compress"), Is.Null);
+            Assert.That(@params.Get("decompress"), Is.Null);
+            Assert.That(@params.Get("network_compression_method"), Is.Null);
+            Assert.That(@params.Get("enable_http_compression"), Is.EqualTo("false"));
+        });
+    }
+
+    private static System.Collections.Specialized.NameValueCollection BuildAndParse(Action<ClickHouseUriBuilder> configure)
+    {
+        var builder = new ClickHouseUriBuilder(new Uri("http://some.server:123"))
+        {
+            Sql = "SELECT 1",
+        };
+        configure(builder);
+        var uri = new Uri(builder.ToString());
+        return HttpUtility.ParseQueryString(uri.Query);
     }
 }

@@ -22,6 +22,7 @@ using ClickHouse.Driver.Json;
 using ClickHouse.Driver.Logging;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using ClickHouse.Driver.Utility.BlockCompression;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IO;
@@ -236,7 +237,7 @@ public sealed class ClickHouseClient : IClickHouseClient
         CancellationToken cancellationToken = default)
     {
         var result = await PostSqlQueryAsync(sql, parameters, options, cancellationToken).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result.HttpResponseMessage, TypeSettings, Settings.EffectiveCompressionMethod).ConfigureAwait(false);
     }
 
     internal async Task<QueryResult> PostSqlQueryAsync(
@@ -320,14 +321,32 @@ public sealed class ClickHouseClient : IClickHouseClient
         AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
         HttpContent content = new StringContent(sqlQuery);
         content.Headers.ContentType = new MediaTypeHeaderValue("text/sql");
-        if (Settings.UseCompression)
-        {
-            content = new CompressedContent(content, DecompressionMethods.GZip);
-        }
+        content = WrapRequestContent(content);
 
         postMessage.Content = content;
 
         return postMessage;
+    }
+
+    /// <summary>
+    /// Applies the configured compression method to a request body.
+    /// Gzip uses standard HTTP Content-Encoding; Lz4/Zstd use ClickHouse
+    /// native block framing. None returns the content unchanged.
+    /// </summary>
+    private HttpContent WrapRequestContent(HttpContent content)
+    {
+        switch (Settings.EffectiveCompressionMethod)
+        {
+            case CompressionMethod.Gzip:
+                return new CompressedContent(content, DecompressionMethods.GZip);
+            case CompressionMethod.Lz4:
+                return new BlockCompressedContent(content, new Lz4BlockCodec());
+            case CompressionMethod.Zstd:
+                return new BlockCompressedContent(content, new ZstdBlockCodec());
+            case CompressionMethod.None:
+            default:
+                return content;
+        }
     }
 
     private HttpRequestMessage BuildHttpRequestMessageWithFormData(string sqlQuery, ClickHouseParameterCollection parameters, ClickHouseUriBuilder uriBuilder, QueryOptions queryOptions)
@@ -390,15 +409,18 @@ public sealed class ClickHouseClient : IClickHouseClient
         using (batch) // Dispose object regardless whether sending succeeds
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendBatchAsync), 128 * 1024);
+            var method = Settings.EffectiveCompressionMethod;
+            bool useSerializerGzip = method != CompressionMethod.Lz4 && method != CompressionMethod.Zstd;
+
             // Async serialization
-            await Task.Run(() => serializer.Serialize(batch, stream), token).ConfigureAwait(false);
+            await Task.Run(() => serializer.Serialize(batch, stream, useSerializerGzip), token).ConfigureAwait(false);
 
             // Seek to beginning as after writing it's at end
             stream.Seek(0, SeekOrigin.Begin);
 
             // Async sending
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
+            await PostStreamAsync(null, stream, useSerializerGzip, token, insertOptions).ConfigureAwait(false);
 
             onBatchSent?.Invoke(batch.Size);
 
@@ -592,12 +614,15 @@ public sealed class ClickHouseClient : IClickHouseClient
         using (batch)
         {
             using var stream = MemoryStreamManager.GetStream(nameof(SendPocoBatchAsync), 128 * 1024);
-            await Task.Run(() => serializer.Serialize(batch, getters, stream), token).ConfigureAwait(false);
+            var method = Settings.EffectiveCompressionMethod;
+            bool useSerializerGzip = method != CompressionMethod.Lz4 && method != CompressionMethod.Zstd;
+
+            await Task.Run(() => serializer.Serialize(batch, getters, stream, useSerializerGzip), token).ConfigureAwait(false);
 
             stream.Seek(0, SeekOrigin.Begin);
 
             logger?.LogDebug("Sending batch of {Rows} rows to {Table}.", batch.Size, destinationTable);
-            await PostStreamAsync(null, stream, true, token, insertOptions).ConfigureAwait(false);
+            await PostStreamAsync(null, stream, useSerializerGzip, token, insertOptions).ConfigureAwait(false);
 
             logger?.LogDebug("Batch sent to {Table}. Rows in batch: {BatchRows}.", destinationTable, batch.Size);
             return batch.Size;
@@ -699,11 +724,10 @@ public sealed class ClickHouseClient : IClickHouseClient
         HttpContent content = new StreamContent(stream);
         if (useCompression)
         {
-            // CompressedContent handles compression and adds Content-Encoding header
-            content = new CompressedContent(content, System.Net.DecompressionMethods.GZip);
+            content = WrapRequestContent(content);
         }
 
-        // Pass isCompressed=false since CompressedContent already adds the Content-Encoding header
+        // Pass isCompressed=false since WrapRequestContent already added the appropriate wrapping/headers.
         try
         {
             return await PostStreamAsync(query, content, isCompressed: false, options, cancellationToken).ConfigureAwait(false);
@@ -738,6 +762,16 @@ public sealed class ClickHouseClient : IClickHouseClient
 
         using var postMessage = new HttpRequestMessage(HttpMethod.Post, builder.ToString());
         AddDefaultHttpHeaders(postMessage.Headers, queryOptions);
+
+        // For Lz4/Zstd we use ClickHouse native block framing; wrap the raw body so the server can
+        // parse it (compress=1/decompress=1 are set on the URL by ClickHouseUriBuilder). The legacy
+        // Content-Encoding: gzip header is not applicable to block framing.
+        var effectiveMethod = Settings.EffectiveCompressionMethod;
+        if (effectiveMethod == CompressionMethod.Lz4 || effectiveMethod == CompressionMethod.Zstd)
+        {
+            content = WrapRequestContent(content);
+            isCompressed = false;
+        }
 
         postMessage.Content = content;
         postMessage.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -815,6 +849,7 @@ public sealed class ClickHouseClient : IClickHouseClient
             Database = queryOverride?.Database ?? Settings.Database,
             SessionId = sessionId,
             UseCompression = Settings.UseCompression,
+            CompressionMethod = Settings.CompressionMethod,
             ConnectionQueryStringParameters = Settings.CustomSettings,
             CommandQueryStringParameters = queryOverride?.CustomSettings,
             ConnectionRoles = Settings.Roles,
@@ -853,7 +888,9 @@ public sealed class ClickHouseClient : IClickHouseClient
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/csv"));
         headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
 
-        if (Settings.UseCompression)
+        // Accept-Encoding only applies to gzip/deflate (standard HTTP Content-Encoding).
+        // Lz4/Zstd responses arrive as application/octet-stream with our own framing.
+        if (Settings.EffectiveCompressionMethod == CompressionMethod.Gzip)
         {
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
             headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));

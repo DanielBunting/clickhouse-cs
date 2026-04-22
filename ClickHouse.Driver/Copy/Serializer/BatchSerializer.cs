@@ -25,34 +25,46 @@ internal class BatchSerializer : IBatchSerializer
         this.rowSerializer = rowSerializer;
     }
 
-    public void Serialize(Batch batch, Stream stream)
+    public void Serialize(Batch batch, Stream stream) => Serialize(batch, stream, useGzip: true);
+
+    public void Serialize(Batch batch, Stream stream, bool useGzip)
     {
-        using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
-        using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
-        {
-            textWriter.WriteLine(batch.Query);
-        }
-
-        using var writer = new ExtendedBinaryWriter(gzipStream);
-
-        object[] row = null;
-        int counter = 0;
-        var enumerator = batch.Rows.GetEnumerator();
+        Stream sink = useGzip
+            ? new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024)
+            : stream;
         try
         {
-            while (enumerator.MoveNext())
+            using (var textWriter = new StreamWriter(sink, Encoding.UTF8, 4 * 1024, true))
             {
-                row = (object[])enumerator.Current;
-                rowSerializer.Serialize(row, batch.Types, writer);
+                textWriter.WriteLine(batch.Query);
+            }
 
-                counter++;
-                if (counter >= batch.Size)
-                    break; // We've reached the batch size
+            using var writer = new ExtendedBinaryWriter(sink, leaveOpen: true);
+
+            object[] row = null;
+            int counter = 0;
+            var enumerator = batch.Rows.GetEnumerator();
+            try
+            {
+                while (enumerator.MoveNext())
+                {
+                    row = (object[])enumerator.Current;
+                    rowSerializer.Serialize(row, batch.Types, writer);
+
+                    counter++;
+                    if (counter >= batch.Size)
+                        break;
+                }
+            }
+            catch (Exception e)
+            {
+                throw new ClickHouseBulkCopySerializationException(row, e);
             }
         }
-        catch (Exception e)
+        finally
         {
-            throw new ClickHouseBulkCopySerializationException(row, e);
+            if (useGzip)
+                sink.Dispose();
         }
     }
 }

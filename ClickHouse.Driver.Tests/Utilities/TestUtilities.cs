@@ -107,10 +107,15 @@ public static class TestUtilities
         }
     }
 
-    public static ClickHouseClientSettings GetTestClickHouseClientSettings(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClientSettings GetTestClickHouseClientSettings(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String, CompressionMethod? compressionMethod = null)
     {
         var builder = GetConnectionStringBuilder();
-        builder.Compression = compression;
+        // CompressionMethod takes precedence when supplied; otherwise fall back to the legacy bool
+        // so existing callers keep their current Gzip-when-true / None-when-false behavior.
+        if (compressionMethod.HasValue)
+            builder.CompressionMethod = compressionMethod.Value;
+        else
+            builder.Compression = compression;
         builder.UseSession = session;
         builder.UseCustomDecimals = customDecimals;
         builder.JsonReadMode = jsonReadMode;
@@ -162,9 +167,9 @@ public static class TestUtilities
         };
     }
 
-    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String)
+    public static ClickHouseClient GetTestClickHouseClient(bool compression = true, bool session = false, bool customDecimals = true, string password = null, bool useFormDataParameters = false, JsonReadMode jsonReadMode = JsonReadMode.Binary, JsonWriteMode jsonWriteMode = JsonWriteMode.String, CompressionMethod? compressionMethod = null)
     {
-        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode);
+        var settings = GetTestClickHouseClientSettings(compression, session, customDecimals, password, useFormDataParameters, jsonReadMode, jsonWriteMode, compressionMethod);
         return new ClickHouseClient(settings);
     }
 

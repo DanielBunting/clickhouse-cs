@@ -461,6 +461,71 @@ public class ClickHouseClientSettingsTests
     }
 
     [Test]
+    public void ToConnectionStringBuilder_AndBack_ShouldPreserveLz4CompressionMethod()
+    {
+        var originalSettings = new ClickHouseClientSettings
+        {
+            Host = "myhost",
+            Port = 8123,
+            UseCompression = true,
+            CompressionMethod = CompressionMethod.Lz4,
+        };
+
+        var builder = ClickHouseConnectionStringBuilder.FromSettings(originalSettings);
+        var roundTrippedSettings = builder.ToSettings();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(roundTrippedSettings.CompressionMethod, Is.EqualTo(CompressionMethod.Lz4));
+            Assert.That(roundTrippedSettings.UseCompression, Is.True);
+            Assert.That(builder.ConnectionString, Does.Contain("Compression=Lz4"));
+        });
+    }
+
+    [Test]
+    public void ToConnectionStringBuilder_AndBack_ShouldPreserveZstdCompressionMethod()
+    {
+        var originalSettings = new ClickHouseClientSettings
+        {
+            CompressionMethod = CompressionMethod.Zstd,
+        };
+
+        var builder = ClickHouseConnectionStringBuilder.FromSettings(originalSettings);
+        var roundTrippedSettings = builder.ToSettings();
+
+        Assert.That(roundTrippedSettings.CompressionMethod, Is.EqualTo(CompressionMethod.Zstd));
+    }
+
+    [Test]
+    public void EffectiveCompressionMethod_WhenUseCompressionFalse_ReturnsNone()
+    {
+        // Disabling UseCompression must defeat any configured method — this is the internal
+        // invariant the URI builder and client rely on to stay consistent.
+        var settings = new ClickHouseClientSettings
+        {
+            UseCompression = false,
+            CompressionMethod = CompressionMethod.Lz4,
+        };
+
+        Assert.That(settings.EffectiveCompressionMethod, Is.EqualTo(CompressionMethod.None));
+    }
+
+    [TestCase(CompressionMethod.None)]
+    [TestCase(CompressionMethod.Gzip)]
+    [TestCase(CompressionMethod.Lz4)]
+    [TestCase(CompressionMethod.Zstd)]
+    public void EffectiveCompressionMethod_WhenUseCompressionTrue_ReturnsConfiguredMethod(CompressionMethod method)
+    {
+        var settings = new ClickHouseClientSettings
+        {
+            UseCompression = true,
+            CompressionMethod = method,
+        };
+
+        Assert.That(settings.EffectiveCompressionMethod, Is.EqualTo(method));
+    }
+
+    [Test]
     public void FromConnectionString_ToBuilder_AndBack_ShouldPreserveValues()
     {
         var connectionString = "Host=myhost;Port=9000;Database=mydb;";

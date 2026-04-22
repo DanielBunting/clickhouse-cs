@@ -53,6 +53,11 @@ public static class ClickHouseDefaults
     public const bool Compression = true;
 
     /// <summary>
+    /// Default compression method (Gzip, for backwards compatibility).
+    /// </summary>
+    public const CompressionMethod DefaultCompressionMethod = CompressionMethod.Gzip;
+
+    /// <summary>
     /// Default session usage setting (disabled)
     /// </summary>
     public const bool UseSession = false;

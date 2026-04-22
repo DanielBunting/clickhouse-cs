@@ -23,7 +23,9 @@ public class BulkCopyWithDefaultsTests : AbstractConnectionTestFixture
         yield return new TestCaseData("Nullable(UInt32) default 42", DBNull.Value, DBNull.Value, "Nullable_UInt32_not_default_null");
         yield return new TestCaseData("String default 'foo'", DBDefault.Value, "foo", "String_default");
         yield return new TestCaseData("String default 'foo'", "bar", "bar", "String_not_default");
-        yield return new TestCaseData("Date default toDate(now())", DBDefault.Value, DateTime.Today, "DateTime_default");
+        // Server computes toDate(now()) in UTC; compare against the UTC date so the test doesn't
+        // flake when local midnight and UTC midnight straddle a day boundary.
+        yield return new TestCaseData("Date default toDate(now())", DBDefault.Value, DateTime.UtcNow.Date, "DateTime_default");
         yield return new TestCaseData("Date default toDate(now())", new DateTime(2003, 5, 2), new DateTime(2003, 5, 2), "DateTime_not_default");
     }
 

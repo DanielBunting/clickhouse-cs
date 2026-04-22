@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Web;
+using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.Utility;
 
 namespace ClickHouse.Driver;
@@ -22,6 +23,8 @@ internal class ClickHouseUriBuilder
     public string Sql { get; set; }
 
     public bool UseCompression { get; set; }
+
+    public CompressionMethod CompressionMethod { get; set; } = CompressionMethod.Gzip;
 
     public string Database { get; set; }
 
@@ -70,9 +73,22 @@ internal class ClickHouseUriBuilder
     public override string ToString()
     {
         var parameters = new Dictionary<string, string>(); // NameValueCollection but a special one
+        var effectiveMethod = UseCompression ? CompressionMethod : CompressionMethod.None;
+
+        // enable_http_compression: gzip/deflate via standard Content-Encoding.
         parameters.Set(
             "enable_http_compression",
-            UseCompression.ToString(CultureInfo.InvariantCulture).ToLowerInvariant());
+            (effectiveMethod == CompressionMethod.Gzip).ToString(CultureInfo.InvariantCulture).ToLowerInvariant());
+
+        // Native block framing: compress=1 (server compresses response),
+        // decompress=1 (server decompresses request), network_compression_method selects the method.
+        if (effectiveMethod == CompressionMethod.Lz4 || effectiveMethod == CompressionMethod.Zstd)
+        {
+            parameters.Set("compress", "1");
+            parameters.Set("decompress", "1");
+            parameters.Set("network_compression_method", effectiveMethod == CompressionMethod.Lz4 ? "lz4" : "zstd");
+        }
+
         parameters.Set("default_format", DefaultFormat);
         parameters.SetOrRemove("database", Database);
         parameters.SetOrRemove("session_id", SessionId);

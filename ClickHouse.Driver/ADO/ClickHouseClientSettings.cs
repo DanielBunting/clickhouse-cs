@@ -57,6 +57,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
         Password = other.Password;
         BearerToken = other.BearerToken;
         UseCompression = other.UseCompression;
+        CompressionMethod = other.CompressionMethod;
         UseCustomDecimals = other.UseCustomDecimals;
         ReadStringsAsByteArrays = other.ReadStringsAsByteArrays;
         UseSession = other.UseSession;
@@ -143,6 +144,21 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
     /// Default: true
     /// </summary>
     public bool UseCompression { get; init; } = ClickHouseDefaults.Compression;
+
+    /// <summary>
+    /// Gets or sets the compression method for HTTP request/response bodies.
+    /// Default: Gzip (matches legacy behavior).
+    /// </summary>
+    public CompressionMethod CompressionMethod { get; init; } = ClickHouseDefaults.DefaultCompressionMethod;
+
+    /// <summary>
+    /// The effective compression method, reconciling the legacy
+    /// <see cref="UseCompression"/> flag with the newer
+    /// <see cref="CompressionMethod"/> enum: when <see cref="UseCompression"/>
+    /// is false the effective method is None regardless of the enum.
+    /// </summary>
+    internal CompressionMethod EffectiveCompressionMethod =>
+        UseCompression ? CompressionMethod : CompressionMethod.None;
 
     /// <summary>
     /// Gets or sets whether to use custom decimal types.
@@ -325,6 +341,7 @@ public class ClickHouseClientSettings : IEquatable<ClickHouseClientSettings>
             Password = builder.Password,
             Path = builder.Path,
             UseCompression = builder.Compression,
+            CompressionMethod = builder.CompressionMethod,
             UseSession = builder.UseSession,
             SessionId = builder.SessionId,
             Timeout = builder.Timeout,

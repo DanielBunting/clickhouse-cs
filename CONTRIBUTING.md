@@ -51,7 +51,7 @@ to ensure everyone in the community can safely benefit from your contribution.
 The solution includes three test projects:
 
 - **ClickHouse.Driver.Tests** - Unit and functional tests
-- **ClickHouse.Driver.IntegrationTests** - Integration tests (Liq2db)
+- **ClickHouse.Driver.IntegrationTests** - Integration tests (Linq2db)
 - **ClickHouse.Driver.Benchmark** - Performance benchmarks (BenchmarkDotNet)
 
 ### Running unit tests

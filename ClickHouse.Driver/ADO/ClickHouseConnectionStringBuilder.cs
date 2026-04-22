@@ -57,8 +57,45 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
 
     public bool Compression
     {
-        get => GetBooleanOrDefault("Compression", true);
+        get => CompressionMethod != CompressionMethod.None;
         set => this["Compression"] = value;
+    }
+
+    /// <summary>
+    /// Gets or sets the compression method.
+    /// Accepts <c>None</c>, <c>Gzip</c>, <c>Lz4</c>, <c>Zstd</c> — or the
+    /// legacy boolean values (<c>true</c> → Gzip, <c>false</c> → None).
+    /// </summary>
+    public CompressionMethod CompressionMethod
+    {
+        get => GetCompressionMethodOrDefault();
+        set => this["Compression"] = value switch
+        {
+            // Preserve legacy boolean form for None/Gzip to keep existing connection
+            // strings round-tripping byte-identically.
+            CompressionMethod.None => "False",
+            CompressionMethod.Gzip => "True",
+            _ => value.ToString(),
+        };
+    }
+
+    private CompressionMethod GetCompressionMethodOrDefault()
+    {
+        if (!TryGetValue("Compression", out var value) || value == null)
+            return ClickHouseDefaults.DefaultCompressionMethod;
+
+        var s = value as string ?? value.ToString();
+        if (string.IsNullOrEmpty(s))
+            return ClickHouseDefaults.DefaultCompressionMethod;
+
+        if (bool.TryParse(s, out var boolean))
+            return boolean ? CompressionMethod.Gzip : CompressionMethod.None;
+
+        if (Enum.TryParse<CompressionMethod>(s, ignoreCase: true, out var method))
+            return method;
+
+        throw new ArgumentException(
+            $"Unrecognized Compression value '{s}'. Valid values: None, Gzip, Lz4, Zstd, true, false.");
     }
 
     public bool UseSession
@@ -210,7 +247,7 @@ public class ClickHouseConnectionStringBuilder : DbConnectionStringBuilder
             Username = settings.Username,
             Password = settings.Password,
             Path = settings.Path,
-            Compression = settings.UseCompression,
+            CompressionMethod = settings.EffectiveCompressionMethod,
             UseSession = settings.UseSession,
             SessionId = settings.SessionId,
             Timeout = settings.Timeout,

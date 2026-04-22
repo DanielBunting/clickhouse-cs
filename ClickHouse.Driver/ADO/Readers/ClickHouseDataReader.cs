@@ -16,6 +16,7 @@ using ClickHouse.Driver.Formats;
 using ClickHouse.Driver.Numerics;
 using ClickHouse.Driver.Types;
 using ClickHouse.Driver.Utility;
+using ClickHouse.Driver.Utility.BlockCompression;
 
 namespace ClickHouse.Driver.ADO.Readers;
 
@@ -39,7 +40,7 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         CurrentRow = new object[FieldNames.Length];
     }
 
-    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings)
+    internal static async Task<ClickHouseDataReader> FromHttpResponseAsync(HttpResponseMessage httpResponse, TypeSettings settings, ADO.CompressionMethod compressionMethod = ADO.CompressionMethod.None)
     {
         if (httpResponse is null) throw new ArgumentNullException(nameof(httpResponse));
 
@@ -53,6 +54,11 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
         try
         {
             var rawStream = await httpResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            // For native block-framed responses, unwrap the framing before buffering.
+            if (compressionMethod == ADO.CompressionMethod.Lz4 || compressionMethod == ADO.CompressionMethod.Zstd)
+                rawStream = new BlockDecompressionStream(rawStream);
+
             var buffered = new BufferedStream(rawStream, BufferSize);
 
             // Conditionally wrap with exception-aware stream

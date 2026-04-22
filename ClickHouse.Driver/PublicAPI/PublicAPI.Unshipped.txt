@@ -201,3 +201,17 @@ ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.get -> Cli
 ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.JsonWriteMode.set -> void
 [Obsolete]ClickHouse.Driver.Copy.ClickHouseBulkCopy.InitAsync() -> System.Threading.Tasks.Task
 static ClickHouse.Driver.Utility.CommandExtensions.AddParameterWithTypeOverride(this ClickHouse.Driver.ADO.ClickHouseCommand command, string parameterName, string clickHouseType, object parameterValue) -> ClickHouse.Driver.ADO.Parameters.ClickHouseDbParameter
+ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.CompressionMethod.None = 0 -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.CompressionMethod.Gzip = 1 -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.CompressionMethod.Lz4 = 2 -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.CompressionMethod.Zstd = 3 -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CompressionMethod.get -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.ClickHouseClientSettings.CompressionMethod.init -> void
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.CompressionMethod.get -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.ADO.ClickHouseConnectionStringBuilder.CompressionMethod.set -> void
+const ClickHouse.Driver.ADO.ClickHouseDefaults.DefaultCompressionMethod = ClickHouse.Driver.ADO.CompressionMethod.Gzip -> ClickHouse.Driver.ADO.CompressionMethod
+ClickHouse.Driver.Utility.BlockCompression.ClickHouseCompressionException
+ClickHouse.Driver.Utility.BlockCompression.ClickHouseCompressionException.ClickHouseCompressionException() -> void
+ClickHouse.Driver.Utility.BlockCompression.ClickHouseCompressionException.ClickHouseCompressionException(string message) -> void
+ClickHouse.Driver.Utility.BlockCompression.ClickHouseCompressionException.ClickHouseCompressionException(string message, System.Exception innerException) -> void
