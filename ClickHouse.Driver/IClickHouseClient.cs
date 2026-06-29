@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using ClickHouse.Driver.ADO;
 using ClickHouse.Driver.ADO.Parameters;
 using ClickHouse.Driver.ADO.Readers;
+using ClickHouse.Driver.Copy;
 using ClickHouse.Driver.Json;
 
 namespace ClickHouse.Driver;
@@ -160,6 +161,34 @@ public interface IClickHouseClient : IDisposable
         IEnumerable<T> rows,
         InsertOptions options = null,
         CancellationToken cancellationToken = default)
+        where T : class;
+
+    /// <summary>
+    /// Creates a stateful, schema-fixed bulk inserter that streams <c>object[]</c> rows into a single
+    /// ClickHouse INSERT. Call <see cref="ClickHouseBinaryInserter.InitAsync"/> to resolve the schema once
+    /// and open the streaming INSERT, push rows via its <c>WriteAsync</c>/<c>WriteRowAsync</c> methods, then
+    /// <see cref="ClickHouseBinaryInserter.CompleteAsync"/> to finalize. The inserter's lifetime is one
+    /// INSERT request — which is not necessarily one part nor atomic; see <see cref="ClickHouseBinaryInserter"/>.
+    /// </summary>
+    /// <param name="table">The destination table name.</param>
+    /// <param name="columns">The destination columns. When null, the table's full column list is used.</param>
+    /// <param name="options">Optional insert options (e.g. BatchSize flush cadence, MaxExecutionTime).</param>
+    ClickHouseBinaryInserter CreateBinaryInserter(
+        string table,
+        IEnumerable<string> columns = null,
+        InsertOptions options = null);
+
+    /// <summary>
+    /// Creates a stateful, schema-fixed bulk inserter that streams strongly-typed rows into a single
+    /// ClickHouse INSERT. The type must be registered via <see cref="RegisterBinaryInsertType{T}"/> first.
+    /// Typed counterpart of <see cref="CreateBinaryInserter(string, IEnumerable{string}, InsertOptions)"/>.
+    /// </summary>
+    /// <typeparam name="T">The registered POCO type.</typeparam>
+    /// <param name="table">The destination table name.</param>
+    /// <param name="options">Optional insert options (e.g. BatchSize flush cadence, MaxExecutionTime).</param>
+    ClickHouseBinaryInserter<T> CreateBinaryInserter<T>(
+        string table,
+        InsertOptions options = null)
         where T : class;
 
     /// <summary>

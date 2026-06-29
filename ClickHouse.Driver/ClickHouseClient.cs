@@ -513,11 +513,51 @@ public sealed class ClickHouseClient : IClickHouseClient
         return options;
     }
 
+    /// <inheritdoc />
+    public ClickHouseBinaryInserter CreateBinaryInserter(
+        string table,
+        IEnumerable<string> columns = null,
+        InsertOptions options = null)
+    {
+        if (table is null)
+            throw new ArgumentNullException(nameof(table));
+
+        return new ClickHouseBinaryInserter(this, table, columns, options);
+    }
+
+    /// <inheritdoc />
+    public ClickHouseBinaryInserter<T> CreateBinaryInserter<T>(
+        string table,
+        InsertOptions options = null)
+        where T : class
+    {
+        if (table is null)
+            throw new ArgumentNullException(nameof(table));
+
+        var mapping = pocoTypeRegistry.GetInsertMapping<T>()
+            ?? throw new InvalidOperationException(
+                $"Type '{typeof(T).Name}' is not registered for binary insert. " +
+                $"Call RegisterBinaryInsertType<{typeof(T).Name}>() first.");
+
+        var properties = mapping.Properties;
+        options = ApplyPocoColumnAttributes(mapping, options);
+
+        if (mapping.ColumnTypes == null && Array.Exists(properties, p => p.ExplicitClickHouseType != null))
+        {
+            GetLogger(ClickHouseLogCategories.Client)?.LogWarning(
+                "Type '{TypeName}' has [ClickHouseColumn(Type)] on some properties but not all. " +
+                "The schema probe will not be skipped. To skip it, add explicit types to all mapped properties.",
+                typeof(T).Name);
+        }
+
+        return new ClickHouseBinaryInserter<T>(this, table, properties, mapping.Getters, options);
+    }
+
     /// <summary>
     /// Resolved insert metadata shared by both the <c>object[]</c> and POCO insert paths.
     /// Produced by <see cref="PrepareInsertAsync"/> after validation and schema resolution.
     /// </summary>
-    private readonly struct InsertPlan
+    internal readonly struct InsertPlan
     {
         /// <summary>The finalized options (defaulted and validated).</summary>
         public InsertOptions Options { get; init; }
@@ -537,7 +577,7 @@ public sealed class ClickHouseClient : IClickHouseClient
     /// Shared setup for both <see cref="InsertBinaryAsync(string, IEnumerable{string}, IEnumerable{object[]}, InsertOptions, CancellationToken)"/>
     /// and <see cref="InsertBinaryAsync{T}(string, IEnumerable{T}, InsertOptions, CancellationToken)"/>.
     /// </summary>
-    private async Task<InsertPlan> PrepareInsertAsync(
+    internal async Task<InsertPlan> PrepareInsertAsync(
         string table, IEnumerable<string> columns, InsertOptions options)
     {
         options ??= new InsertOptions();
@@ -554,6 +594,14 @@ public sealed class ClickHouseClient : IClickHouseClient
                 $"InsertBinaryAsync is configured with MaxDegreeOfParallelism={options.MaxDegreeOfParallelism} while sessions are enabled. " +
                 "ClickHouse only allows one concurrent query per session. " +
                 "Set MaxDegreeOfParallelism to 1, or disable sessions for this insert by setting InsertOptions.UseSession to false.");
+        }
+
+        if (options.StreamSingleInsert && options.MaxDegreeOfParallelism > 1)
+        {
+            throw new InvalidOperationException(
+                $"InsertBinaryAsync is configured with StreamSingleInsert=true and MaxDegreeOfParallelism={options.MaxDegreeOfParallelism}. " +
+                "A single streaming insert is sent as one request. " +
+                "Set MaxDegreeOfParallelism to 1, or disable InsertOptions.StreamSingleInsert.");
         }
 
         var logger = GetLogger(ClickHouseLogCategories.Client);
@@ -605,19 +653,35 @@ public sealed class ClickHouseClient : IClickHouseClient
         long totalRowsWritten = 0;
         var batches = IntoPocoBatches(rows, plan);
 
-        await Parallel.ForEachAsync(
-            batches,
-            new ParallelOptions
-            {
-                MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
-                CancellationToken = cancellationToken,
-            },
-            async (batch, ct) =>
-            {
-                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
-                var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
-                Interlocked.Add(ref totalRowsWritten, count);
-            }).ConfigureAwait(false);
+        if (plan.Options.StreamSingleInsert)
+        {
+            var insertOptions = plan.Options.WithQueryId(plan.BaseQueryId);
+
+            void Progress(long count) => totalRowsWritten += count;
+
+            await PostStreamAsync(
+                null,
+                (stream, ct) => serializer.SerializeStreamingAsync(plan.Query, batches, getters, stream, Progress, ct),
+                isCompressed: true,
+                cancellationToken,
+                insertOptions).ConfigureAwait(false);
+        }
+        else
+        {
+            await Parallel.ForEachAsync(
+                batches,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
+                    CancellationToken = cancellationToken,
+                },
+                async (batch, ct) =>
+                {
+                    var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}"); // Avoid duplicate query ids across batches
+                    var count = await SendPocoBatchAsync(table, batch, getters, serializer, batchOptions, ct).ConfigureAwait(false);
+                    Interlocked.Add(ref totalRowsWritten, count);
+                }).ConfigureAwait(false);
+        }
 
         if (isDebugLoggingEnabled)
         {
@@ -689,19 +753,39 @@ public sealed class ClickHouseClient : IClickHouseClient
         long totalRowsWritten = 0;
         var batches = IntoBatches(rows, plan.Query, plan.ColumnTypes, plan.Options.BatchSize);
 
-        await Parallel.ForEachAsync(
-            batches,
-            new ParallelOptions
+        if (plan.Options.StreamSingleInsert)
+        {
+            var insertOptions = plan.Options.WithQueryId(plan.BaseQueryId);
+
+            void Progress(long count)
             {
-                MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
-                CancellationToken = cancellationToken,
-            },
-            async (batch, ct) =>
-            {
-                var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
-                var count = await SendBatchAsync(table, batch, serializer, batchOptions, onBatchSent, ct).ConfigureAwait(false);
-                Interlocked.Add(ref totalRowsWritten, count);
-            }).ConfigureAwait(false);
+                totalRowsWritten += count;
+                onBatchSent?.Invoke(count);
+            }
+
+            await PostStreamAsync(
+                null,
+                (stream, ct) => serializer.SerializeStreamingAsync(plan.Query, batches, stream, Progress, ct),
+                isCompressed: true,
+                cancellationToken,
+                insertOptions).ConfigureAwait(false);
+        }
+        else
+        {
+            await Parallel.ForEachAsync(
+                batches,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = plan.Options.MaxDegreeOfParallelism,
+                    CancellationToken = cancellationToken,
+                },
+                async (batch, ct) =>
+                {
+                    var batchOptions = plan.Options.WithQueryId($"{plan.BaseQueryId}-{Interlocked.Increment(ref queryIdCounter)}");
+                    var count = await SendBatchAsync(table, batch, serializer, batchOptions, onBatchSent, ct).ConfigureAwait(false);
+                    Interlocked.Add(ref totalRowsWritten, count);
+                }).ConfigureAwait(false);
+        }
 
         if (isDebugLoggingEnabled)
         {

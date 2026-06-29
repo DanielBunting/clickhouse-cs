@@ -21,6 +21,30 @@ public sealed class InsertOptions : QueryOptions
     public int MaxDegreeOfParallelism { get; init; } = 1;
 
     /// <summary>
+    /// When <c>true</c>, the entire insert is sent as a single streaming HTTP INSERT instead of one
+    /// request per batch. The per-request cost (connection acquisition and query setup) is paid once for
+    /// the whole insert instead of once per batch, and client serialization overlaps server ingestion.
+    /// <see cref="BatchSize"/> still controls the cadence at which compressed bytes are flushed to the
+    /// server, keeping client memory bounded to roughly one batch rather than buffering the whole dataset.
+    /// <see cref="MaxDegreeOfParallelism"/> must be 1. Default is <c>false</c>.
+    /// <para>
+    /// This sends one HTTP request but does <b>not</b> make the insert atomic. ClickHouse re-blocks the
+    /// incoming stream at <c>max_insert_block_size</c> (~1M rows), so an insert large enough to exceed it,
+    /// or one spanning multiple partitions, is written as multiple parts that commit independently — a
+    /// mid-stream failure can therefore leave a partial commit. Only an insert that fits in a single block
+    /// within a single partition is atomic.
+    /// </para>
+    /// <para>
+    /// Timeout caveat: the whole insert runs as one HTTP request, so the client-side request timeout
+    /// (<c>ClickHouseClientSettings.Timeout</c>, default 2 minutes) must cover the entire insert rather
+    /// than resetting per batch as it does in the default path. Raise that timeout for large streaming
+    /// inserts. Likewise, if the server enforces <c>max_execution_time</c>, set it (via
+    /// <see cref="QueryOptions.MaxExecutionTime"/> or a custom setting) to cover the full insert duration.
+    /// </para>
+    /// </summary>
+    public bool StreamSingleInsert { get; init; }
+
+    /// <summary>
     /// Gets or sets the row binary format to use. Default is RowBinary.
     /// </summary>
     public RowBinaryFormat Format { get; init; } = RowBinaryFormat.RowBinary;
@@ -59,6 +83,7 @@ public sealed class InsertOptions : QueryOptions
             MaxExecutionTime = MaxExecutionTime,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+            StreamSingleInsert = StreamSingleInsert,
             Format = Format,
             ColumnTypes = ColumnTypes,
             UseSchemaCache = UseSchemaCache,
@@ -81,6 +106,7 @@ public sealed class InsertOptions : QueryOptions
             MaxExecutionTime = MaxExecutionTime,
             BatchSize = BatchSize,
             MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+            StreamSingleInsert = StreamSingleInsert,
             Format = Format,
             ColumnTypes = columnTypes,
             UseSchemaCache = UseSchemaCache,

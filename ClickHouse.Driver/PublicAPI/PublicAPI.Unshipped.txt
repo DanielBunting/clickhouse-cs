@@ -239,3 +239,23 @@ ClickHouse.Driver.ADO.ClickHouseConnection.RegisterPocoType<T>() -> void
 ClickHouse.Driver.IClickHouseClient.RegisterPocoType<T>() -> void
 ClickHouse.Driver.IClickHouseClient.QueryAsync<T>(string sql, ClickHouse.Driver.ADO.Parameters.ClickHouseParameterCollection parameters = null, ClickHouse.Driver.QueryOptions options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>
 ClickHouse.Driver.ADO.Readers.ClickHouseDataReader.MapTo<T>() -> T
+ClickHouse.Driver.InsertOptions.StreamSingleInsert.get -> bool
+ClickHouse.Driver.InsertOptions.StreamSingleInsert.init -> void
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.RowsWritten.get -> long
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.InitAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.WriteRowAsync(object[] row, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.WriteAsync(System.Collections.Generic.IEnumerable<object[]> rows, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.CompleteAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter.DisposeAsync() -> System.Threading.Tasks.ValueTask
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.RowsWritten.get -> long
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.InitAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.WriteRowAsync(T row, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.WriteAsync(System.Collections.Generic.IEnumerable<T> rows, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.CompleteAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>
+ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>.DisposeAsync() -> System.Threading.Tasks.ValueTask
+ClickHouse.Driver.ClickHouseClient.CreateBinaryInserter(string table, System.Collections.Generic.IEnumerable<string> columns = null, ClickHouse.Driver.InsertOptions options = null) -> ClickHouse.Driver.Copy.ClickHouseBinaryInserter
+ClickHouse.Driver.ClickHouseClient.CreateBinaryInserter<T>(string table, ClickHouse.Driver.InsertOptions options = null) -> ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>
+ClickHouse.Driver.IClickHouseClient.CreateBinaryInserter(string table, System.Collections.Generic.IEnumerable<string> columns = null, ClickHouse.Driver.InsertOptions options = null) -> ClickHouse.Driver.Copy.ClickHouseBinaryInserter
+ClickHouse.Driver.IClickHouseClient.CreateBinaryInserter<T>(string table, ClickHouse.Driver.InsertOptions options = null) -> ClickHouse.Driver.Copy.ClickHouseBinaryInserter<T>

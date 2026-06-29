@@ -1,8 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using ClickHouse.Driver.Formats;
+using ClickHouse.Driver.Types;
 
 namespace ClickHouse.Driver.Copy.Serializer;
 
@@ -45,15 +49,45 @@ internal class PocoBatchSerializer
         }
 
         using var writer = new ExtendedBinaryWriter(gzipStream);
+        SerializeRows(batch.Rows, batch.Size, getters, batch.Types, writer);
+    }
 
-        var types = batch.Types;
+    /// <summary>
+    /// Streams every POCO batch into a single GZip-compressed request body. The compression and writer
+    /// pipeline is built once; compressed bytes are flushed at each batch boundary so client serialization
+    /// overlaps server ingestion within one INSERT.
+    /// </summary>
+    public async Task SerializeStreamingAsync<T>(string query, IEnumerable<PocoBatch<T>> batches, Func<T, object>[] getters, Stream stream, Action<long> onBatchSerialized, CancellationToken token)
+    {
+        using var gzipStream = new BufferedStream(new GZipStream(stream, CompressionLevel.Fastest, true), 256 * 1024);
+        using (var textWriter = new StreamWriter(gzipStream, Encoding.UTF8, 4 * 1024, true))
+        {
+            textWriter.WriteLine(query);
+        }
 
+        using var writer = new ExtendedBinaryWriter(gzipStream);
+
+        foreach (var batch in batches)
+        {
+            using (batch) // Return the rented array regardless of whether serialization succeeds
+            {
+                token.ThrowIfCancellationRequested();
+                SerializeRows(batch.Rows, batch.Size, getters, batch.Types, writer);
+                writer.Flush();
+                await gzipStream.FlushAsync(token).ConfigureAwait(false);
+                onBatchSerialized?.Invoke(batch.Size);
+            }
+        }
+    }
+
+    internal void SerializeRows<T>(T[] rows, int size, Func<T, object>[] getters, ClickHouseType[] types, ExtendedBinaryWriter writer)
+    {
         T current = default;
         try
         {
-            for (int i = 0; i < batch.Size; i++)
+            for (int i = 0; i < size; i++)
             {
-                current = batch.Rows[i];
+                current = rows[i];
                 rowSerializer.Serialize(current, getters, types, writer);
             }
         }
