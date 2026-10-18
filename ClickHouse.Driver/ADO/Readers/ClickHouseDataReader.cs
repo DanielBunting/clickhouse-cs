@@ -318,11 +318,36 @@ public class ClickHouseDataReader : DbDataReader, IEnumerator<IDataReader>, IEnu
 
     // Deliberately narrower than the other accessors: only a non-nullable String column short-circuits. Every other
     // shape keeps ToString()'s coercion, including the quirk that a NULL cell yields "" rather than null, because
-    // DBNull.Value.ToString() is the empty string.
+    // DBNull.Value.ToString() is the empty string. One carve-out: a String/FixedString column read as byte[]
+    // (ReadStringsAsByteArrays) throws instead of coercing — ToString() on an array is its type name,
+    // "System.Byte[]", not a rendering of the value (#486). GetFieldValue<string> already throws there.
     public override string GetString(int ordinal)
-        => Slot(ordinal) is ValueSlot<string> stringSlot
-            ? (readValueConverter == null ? stringSlot.Value : ConvertTyped(ordinal, stringSlot.Value))
-            : GetValue(ordinal)?.ToString();
+    {
+        if (Slot(ordinal) is ValueSlot<string> stringSlot)
+            return readValueConverter == null ? stringSlot.Value : ConvertTyped(ordinal, stringSlot.Value);
+
+        var value = GetValue(ordinal);
+        if (value is byte[] && IsStringReadAsBytes(RawTypes[ordinal]))
+        {
+            throw new InvalidCastException(
+                $"Column '{FieldNames[ordinal]}' is read as byte[] because ReadStringsAsByteArrays is enabled; use GetValue or GetFieldValue<byte[]>.");
+        }
+
+        return value?.ToString();
+    }
+
+    // Decided from the ClickHouse type, not the CLR type: Array(UInt8) also materializes as byte[]
+    // regardless of the setting, and Variant/Dynamic pick their subtype per value, so both keep the
+    // lenient coercion above.
+    private static bool IsStringReadAsBytes(ClickHouseType type) => type switch
+    {
+        StringType st => st.ReadAsByteArray,
+        FixedStringType fst => fst.ReadAsByteArray,
+        NullableType nt => IsStringReadAsBytes(nt.UnderlyingType),
+        LowCardinalityType lc => IsStringReadAsBytes(lc.UnderlyingType),
+        SimpleAggregateFunctionType sa => IsStringReadAsBytes(sa.UnderlyingType),
+        _ => false,
+    };
 
     /// <summary>
     /// The one boxing entry point on the read path. Boxes lazily, per call, so a query that projects ten columns

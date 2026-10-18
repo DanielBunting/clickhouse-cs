@@ -1,0 +1,1 @@
+* Fixed `GetSchema("Columns")` throwing `InvalidCastException` when `ReadStringsAsByteArrays` is enabled; schema metadata is now always returned as strings. `DataReader.GetString()` on a `String`/`FixedString` column read as `byte[]` now throws an `InvalidCastException` pointing to `GetValue`/`GetFieldValue<byte[]>` instead of returning the literal `"System.Byte[]"` (#486)

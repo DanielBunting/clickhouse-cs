@@ -95,6 +95,12 @@ internal static class SchemaDescriber
         }
 
         using var command = connection.CreateCommand();
+
+        // This is the driver reading its own metadata, not user data: every projected column is
+        // text, and the parse below needs strings. Without this override, ReadStringsAsByteArrays
+        // would type the DataTable's columns as byte[] and fill them with byte[] values (#486).
+        command.TypeSettingsOverride = connection.ClickHouseClient.TypeSettings with { readStringsAsByteArrays = false };
+
         var query = new StringBuilder("SELECT database as Database, table as Table, name as Name, type as ProviderType, type as DataType FROM system.columns");
         var database = restrictions != null && restrictions.Length > 0 ? restrictions[0] : null;
         var table = restrictions != null && restrictions.Length > 1 ? restrictions[1] : null;

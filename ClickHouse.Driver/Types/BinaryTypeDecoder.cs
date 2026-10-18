@@ -336,7 +336,7 @@ internal static class BinaryTypeDecoder
         catch
         {
             // If parsing fails, return a string type as fallback
-            return new StringType();
+            return typeSettings.readStringsAsByteArrays ? StringAsByteArraySingleton : StringSingleton;
         }
     }
 

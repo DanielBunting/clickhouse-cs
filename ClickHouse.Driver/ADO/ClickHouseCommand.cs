@@ -111,6 +111,14 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
     /// </remarks>
     public string AcceptEncoding { get; set; }
 
+    /// <summary>
+    /// Overrides the client's <see cref="TypeSettings"/> for readers produced by this command.
+    /// Used by driver-internal metadata queries (see <see cref="Utility.SchemaDescriber"/>) whose
+    /// results must not be reshaped by value-representation settings such as
+    /// <see cref="ClickHouseClientSettings.ReadStringsAsByteArrays"/>.
+    /// </summary>
+    internal TypeSettings? TypeSettingsOverride { get; set; }
+
     protected override DbConnection DbConnection
     {
         get => connection;
@@ -228,7 +236,7 @@ public class ClickHouseCommand : DbCommand, IClickHouseCommand, IDisposable
         var sql = limitClause is null ? commandText : RowLimitAppender.Append(commandText, limitClause);
 
         var result = await PostSqlQueryAsync(sql, lcts.Token).ConfigureAwait(false);
-        return await ClickHouseDataReader.FromHttpResponseAsync(result, connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
+        return await ClickHouseDataReader.FromHttpResponseAsync(result, TypeSettingsOverride ?? connection.ClickHouseClient.TypeSettings, connection.ClickHouseClient.PocoRegistry, connection.ClickHouseClient.Settings.ReadBufferSize, connection.ClickHouseClient.Settings.ReadValueConverter).ConfigureAwait(false);
     }
 
     private async Task<HttpResponseMessage> PostSqlQueryAsync(string sqlQuery, CancellationToken token, bool rawBody = false)

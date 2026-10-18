@@ -1649,6 +1649,8 @@ By default, both `String` and `FixedString(N)` columns are returned as `string`.
 The setting reaches strings nested inside other types too, so `Array(String)` reads as `byte[][]`
 and `Map(String, String)` as `Dictionary<byte[], byte[]>` — keys included. The one exception is a
 `JSON` column, whose string leaves are always text; see [JSON type](#type-map-reading-json).
+
+With the setting enabled, read these columns via `GetValue` or `GetFieldValue<byte[]>`; `GetString` throws `InvalidCastException` rather than silently transforming the raw bytes. Metadata APIs such as `GetSchema` keep returning their values as strings (though the `DataType` column's content still reflects the setting, reporting `Byte[]` for string columns).
 </Note>
 
 ---
